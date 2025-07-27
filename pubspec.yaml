@@ -1,0 +1,28 @@
+name: whisker_works
+description: Mouse Colony Tracking
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.1.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  path_provider: ^2.1.1
+  csv: ^5.0.2
+  shared_preferences: ^2.2.2
+  firebase_core: ^2.30.0
+  cloud_firestore: ^4.17.0
+  cupertino_icons: ^1.0.8
+  rename: ^3.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
