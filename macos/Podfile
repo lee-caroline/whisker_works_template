@@ -1,3 +1,4 @@
+ENV['ARCHS'] = 'arm64'
 platform :macos, '11.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
