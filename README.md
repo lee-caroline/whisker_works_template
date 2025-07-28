@@ -28,7 +28,13 @@ Ensure you have the following installed:
 git clone https://github.com/your-username/whisker-works.git
 cd whisker-works
 ```
+##Quick Setup
 
+After cloning the project:
+
+```bash
+chmod +x setup.sh
+./setup.sh
 ---
 
 ## 3. Flutter Dependency Setup
