@@ -1,3 +1,5 @@
+// main.dart (fully integrated with Firestore, Hive, SharedPreferences, and CSV Export)
+
 import 'package:flutter/material.dart';
 import 'mouse_model.dart';
 import 'dart:convert';
@@ -6,8 +8,16 @@ import 'package:path_provider/path_provider.dart';
 import 'package:csv/csv.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:hive/hive.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  Hive.registerAdapter(MouseDataAdapter());
+  await Hive.openBox<MouseData>('mouseBox');
+
   runApp(MouseColonyApp());
 }
 
@@ -22,6 +32,42 @@ class MouseColonyApp extends StatelessWidget {
   }
 }
 
+class DataSyncService {
+  final CollectionReference _mice = FirebaseFirestore.instance.collection('mice');
+  final Box<MouseData> _localBox = Hive.box<MouseData>('mouseBox');
+
+  Future<void> addMouse(MouseData mouse) async {
+    await _mice.doc(mouse.id).set(mouse.toMap());
+    await _localBox.put(mouse.id, mouse);
+  }
+
+  Future<List<MouseData>> getLocalMice() async {
+    return _localBox.values.toList();
+  }
+}
+
+class CSVExportService {
+  Future<String> exportToCSV(List<MouseData> mice) async {
+    List<List<String>> rows = [
+      ['ID', 'Strain', 'Treatment', 'Sex', 'Procedure', 'DOB', 'Researcher', 'Status', 'Cage', 'Timestamp', 'Litter DOB', 'Wean Date', 'Sex Count'],
+      ...mice.map((m) => [
+        m.id, m.strain, m.treatment, m.sex, m.procedure, m.dob, m.researcher,
+        m.status, m.cage, m.timestamp,
+        m.litterDob ?? '',
+        m.litterWeanDate ?? '',
+        m.litterSexCount ?? ''
+      ])
+    ];
+
+    String csvData = const ListToCsvConverter().convert(rows);
+    final directory = await getApplicationDocumentsDirectory();
+    final path = '${directory.path}/mouse_data.csv';
+    final file = File(path);
+    await file.writeAsString(csvData);
+    return path;
+  }
+}
+
 class MouseDashboard extends StatefulWidget {
   @override
   _MouseDashboardState createState() => _MouseDashboardState();
@@ -30,29 +76,28 @@ class MouseDashboard extends StatefulWidget {
 class _MouseDashboardState extends State<MouseDashboard> {
   List<MouseData> mice = [];
   int mouseCounter = 1;
+  final _dataSyncService = DataSyncService();
+  final _csvExportService = CSVExportService();
 
-@override
-void initState() {
-  super.initState();
-  _loadMiceFromPrefs();
-  RawKeyboard.instance.addListener(_handleKey); // 🔑 Add this line
-}
-  Future<void> _saveMiceToPrefs() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    List<String> miceJson = mice.map((m) => jsonEncode(m.toMap())).toList();
-    await prefs.setStringList('mice', miceJson);
+  @override
+  void initState() {
+    super.initState();
+    _loadMiceFromPrefs();
+    RawKeyboard.instance.addListener(_handleKey);
   }
-void _handleKey(RawKeyEvent event) {
-  if (event is RawKeyDownEvent && !event.repeat) {
-    debugPrint('Key pressed: ${event.logicalKey.debugName}');
-    // You can add actions based on keys here if you want
+
+  @override
+  void dispose() {
+    RawKeyboard.instance.removeListener(_handleKey);
+    super.dispose();
   }
-}
-@override
-void dispose() {
-  RawKeyboard.instance.removeListener(_handleKey);
-  super.dispose();
-}
+
+  void _handleKey(RawKeyEvent event) {
+    if (event is RawKeyDownEvent && !event.repeat) {
+      debugPrint('Key pressed: ${event.logicalKey.debugName}');
+    }
+  }
+
   Future<void> _loadMiceFromPrefs() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     List<String>? miceJson = prefs.getStringList('mice');
@@ -64,32 +109,14 @@ void dispose() {
     }
   }
 
+  Future<void> _saveMiceToPrefs() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    List<String> miceJson = mice.map((m) => jsonEncode(m.toMap())).toList();
+    await prefs.setStringList('mice', miceJson);
+  }
+
   Future<void> _exportCSV() async {
-    List<List<String>> rows = [
-      ['ID', 'Strain', 'Treatment', 'Sex', 'Procedure', 'DOB', 'Researcher', 'Status', 'Cage', 'Timestamp', 'Litter DOB', 'Wean Date', 'Sex Count'],
-      ...mice.map((m) => [
-            m.id,
-            m.strain,
-            m.treatment,
-            m.sex,
-            m.procedure,
-            m.dob,
-            m.researcher,
-            m.status,
-            m.cage,
-            m.timestamp,
-            m.litterDob ?? '',
-            m.litterWeanDate ?? '',
-            m.litterSexCount ?? '',
-          ])
-    ];
-
-    String csvData = const ListToCsvConverter().convert(rows);
-    final directory = await getApplicationDocumentsDirectory();
-    final path = '${directory.path}/mouse_data.csv';
-    final file = File(path);
-    await file.writeAsString(csvData);
-
+    final path = await _csvExportService.exportToCSV(mice);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('CSV exported to $path')),
     );
@@ -134,7 +161,6 @@ void dispose() {
                       decoration: InputDecoration(labelText: 'Enter custom strain'),
                       onChanged: (value) => strain = value,
                     ),
-
                   DropdownButtonFormField<String>(
                     value: treatmentOptions.contains(treatment) ? treatment : 'Other',
                     decoration: InputDecoration(labelText: 'Treatment'),
@@ -146,12 +172,10 @@ void dispose() {
                       decoration: InputDecoration(labelText: 'Enter custom treatment'),
                       onChanged: (value) => treatment = value,
                     ),
-
                   TextField(
                     decoration: InputDecoration(labelText: 'DOB (YYYY-MM-DD)'),
                     onChanged: (value) => dob = value,
                   ),
-
                   DropdownButtonFormField<String>(
                     value: researcherOptions.contains(researcher) ? researcher : 'Other',
                     decoration: InputDecoration(labelText: 'Researcher'),
@@ -163,7 +187,6 @@ void dispose() {
                       decoration: InputDecoration(labelText: 'Enter custom researcher'),
                       onChanged: (value) => researcher = value,
                     ),
-
                   DropdownButtonFormField<String>(
                     value: cageOptions.contains(cage) ? cage : 'Other',
                     decoration: InputDecoration(labelText: 'Cage'),
@@ -175,25 +198,21 @@ void dispose() {
                       decoration: InputDecoration(labelText: 'Enter custom cage'),
                       onChanged: (value) => cage = value,
                     ),
-
                   DropdownButton<String>(
                     value: sex,
                     onChanged: (value) => setState(() => sex = value!),
                     items: ['F', 'M'].map((s) => DropdownMenuItem(value: s, child: Text('Sex: $s'))).toList(),
                   ),
-
                   DropdownButton<String>(
                     value: procedure,
                     onChanged: (value) => setState(() => procedure = value!),
                     items: ['Injection', 'Dissection'].map((s) => DropdownMenuItem(value: s, child: Text('Procedure: $s'))).toList(),
                   ),
-
                   DropdownButton<String>(
                     value: status,
                     onChanged: (value) => setState(() => status = value!),
                     items: ['Living', 'Deceased: CO2', 'Deceased: Natural'].map((s) => DropdownMenuItem(value: s, child: Text('Status: $s'))).toList(),
                   ),
-
                   TextField(
                     decoration: InputDecoration(labelText: 'Litter DOB'),
                     onChanged: (value) => litterDob = value,
@@ -211,28 +230,30 @@ void dispose() {
             ),
             actions: [
               TextButton(
-                onPressed: () {
+                onPressed: () async {
                   if (strain.isNotEmpty && treatment.isNotEmpty && dob.isNotEmpty) {
                     String tag = mouseCounter.toString().padLeft(6, '0');
+                    MouseData newMouse = MouseData(
+                      id: tag,
+                      strain: strain,
+                      treatment: treatment,
+                      sex: sex,
+                      procedure: procedure,
+                      researcher: researcher,
+                      dob: dob,
+                      status: status,
+                      cage: cage,
+                      timestamp: DateTime.now().toString().split('.')[0],
+                      litterDob: litterDob.isNotEmpty ? litterDob : null,
+                      litterWeanDate: litterWeanDate.isNotEmpty ? litterWeanDate : null,
+                      litterSexCount: litterSexCount.isNotEmpty ? litterSexCount : null,
+                    );
                     setState(() {
-                      mice.add(MouseData(
-                        id: tag,
-                        strain: strain,
-                        treatment: treatment,
-                        sex: sex,
-                        procedure: procedure,
-                        researcher: researcher,
-                        dob: dob,
-                        status: status,
-                        cage: cage,
-                        timestamp: DateTime.now().toString().split('.')[0],
-                        litterDob: litterDob.isNotEmpty ? litterDob : null,
-                        litterWeanDate: litterWeanDate.isNotEmpty ? litterWeanDate : null,
-                        litterSexCount: litterSexCount.isNotEmpty ? litterSexCount : null,
-                      ));
+                      mice.add(newMouse);
                       mouseCounter++;
                     });
-                    _saveMiceToPrefs();
+                    await _saveMiceToPrefs();
+                    await _dataSyncService.addMouse(newMouse);
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Mouse $tag added successfully!')),
